@@ -1,22 +1,27 @@
-# OG Privacy for Open Atrium
-This feature provides fine-grained node permissions for Open Atrium-based sites.
+# OG Privacy CTPlus
+This feature provides you with the ability to make projects and tasks private inside Open atrium groups with ct_plus (http://drupal.org/project/ct_plus).  It also allows you to give access to users outside of the group to view and comment on a task or project.
 
-It works by adding a Mark-based widget to node in non-private groups. If left unchecked, the node will be private. This means 
-that current, default behavior requires this box to be **checked on**.
+# Here are some features:
 
-A new field has been added to group nodes (editable in Group settings) called "Per Node Privacy Settings". if left as default, 
-*Use Group Settings*, there will be no change for that group in behavior or UI from Open Atrium's standard behavior. The other 
-two options in this drop-down sets the default for whether nodes will be marked public or private on the form for new nodes.
+- Set project as private | This will prevent members of the project's group to see the project or any of tasks associated with it.
+- Set task as private | This will prevent members of the task's group to see the task
+- Set Project managers | uses userreference to assign project managers to a project.  These users have access to the project (even if they aren't members of the group) and to all the tasks associated with it, even if the tasks are marked as private.
+- Set additional users | uses userreference to assign permissions to a project or task even if they aren't members of the group.  If used on a project node, those users will be able to see all tasks under the project unless those tasks are set as private.  If used on a task they will be able to view and comment on the task.
+
+# Simple example use case: 
+
+You have a group called "Franks Deli".  You want to create a project and manage it under that group but don't want some of the group members (clients) to see your discussion.  You create a project and make it private, set your developers as project managers or additional users.
+
+The clients wont even know that project exists but you can communicate with your developers seemlessly.
+
+
 
 ## Installation
 
-In addition to all standing requirements for og_privacy_atrium, you must use a patched version of the Mark module.
+Be sure you have CTPlus and og_privacy_atrium installed.  Enable this feature and create a group with the "CTPlus - Private group" space.
 
-http://drupal.org/files/issues/mark.868764-5.patch
 
-Apply this patch by downloading it to the directory of the Mark module, and, from within that directory, running:
-
-`> patch < mark.868764-4.patch`
-
-This patch adds the node form widget functionality to Mark.
+Initial notes to self/todo's:
+- need to test "additional users" assigned on project if project is set to private.
+- hide the extra fields if space isn't "CTPlus - Private group"
 
