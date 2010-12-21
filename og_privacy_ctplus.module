@@ -1,0 +1,270 @@
+<?php
+
+// Need to still test:
+// - FIXED - NEEDS MORE TESTING - project with additional users - do they get access to all tasks under the project, but not private tasks?
+// - FIXED - owners can lock them selves out
+
+include_once('og_privacy_ctplus.features.inc');
+
+/**
+ * Implementation of hook_og_privacy_policy_info().
+ */
+function og_privacy_ctplus_og_privacy_policy_info($node) {
+  $policies = array();
+  $policies['og_privacy_ctplus_set_private'] = array(
+    'access callback' => 'og_privacy_ctplus_set_private',
+    'reason' => t('You are not in this group or havent been given access to this node.'),
+    //'exclusive' => TRUE,
+  );
+  return $policies;
+}
+
+/*
+* "private" group policy callback.
+*/
+function og_privacy_ctplus_set_private($node) {
+  //makes the group private by removing og_public access realm
+  //set only if space group is X
+  $space = spaces_get_space();
+  if($space->controllers->variable->values['space']['spaces_preset_og'] == 'og_privacy_ctplus_private') {
+    return FALSE;
+  }
+}
+
+/**
+ * Implementation of hook_nodeapi().
+ */
+function og_privacy_ctplus_nodeapi(&$node, $op) {
+ switch ($op) {
+	case 'load':
+		if ($node->type == "ct_plus_task" && $project = $node->field_ct_plus_project[0]['nid']){
+			$project = node_load($project);
+			if ($project->field_ct_plus_private[0]['value'] == 'yes') {
+				//set if a tasks project is private, making the task private.
+				$node->pmprivate = 1;
+			}
+		}
+		break;
+	case 'presave':
+			if ($node->type == "ct_plus_project") {
+				//make sure node author is also a project manager automatically
+				$pmset = FALSE;
+				if ($node->field_ct_plus_projectmanager[0]['uid'] != NULL) {
+					foreach($node->field_ct_plus_projectmanager as $key => $val) {
+						if($val['uid'] == $node->uid){
+							$pmset = TRUE;
+						}
+					}
+					if(!$pmset) {
+						$node->field_ct_plus_projectmanager[$key+1]['uid'] = $node->uid;
+					}
+				}
+				else {
+					$node->field_ct_plus_projectmanager[0]['uid'] = $node->uid;
+				}
+
+			}
+	break;
+	case 'update':
+		if ($node->type == "ct_plus_project") {
+			
+			//grab the nid's that are referencing the current node
+			//redo node access to those referencing nodes.
+			//this may be a hack and may need to change.
+			$pmresult = og_privacy_ctplus_pm_refs($node->nid);
+			if (isset($pmresult)) {
+				while ($pmrow = db_fetch_array($pmresult)) {
+					$pmnode = node_load($pmrow['nid']);
+					//below sets the overrides pmprivate in the node b/c this runs before access_grants_alter
+					if($node->field_ct_plus_private[0]['value'] == 'no') {// && $pmnode->pmprivate == 1) {
+						$pmnode->pmprivate = 0;
+						node_access_acquire_grants($pmnode);
+					}
+					else {
+						$pmnode->pmprivate = 1;
+						node_access_acquire_grants($pmnode);
+					}
+				}
+			}
+		}
+  }
+}
+
+
+/**
+ * Implementation of hook_form_alter().
+ */
+function og_privacy_ctplus_form_alter(&$form, &$form_state, $form_id) {
+}
+
+
+/**
+ * Implementation of hook_node_grants().
+ */
+function og_privacy_ctplus_node_grants($account, $op) {
+     if ($op == 'view') {
+      // See if user is Project manager or "additional" user... get a grant for them.
+      if ($extrausers = og_privacy_ctplus_get_users($account->uid)) {
+	foreach ($extrausers as $key => $val) {
+	  // Project managers get more permissions.
+	  if ($val['projectmanager']) {
+	    $grants['og_privacy_ctplus_pm'][] = $key;
+	  }
+	  else if ($val['additionalusers']) {
+	    $grants['og_privacy_ctplus_additional'][] = $key;
+	  }
+	}
+      }
+	  //set grants if owner of own node
+	  $grants['og_privacy_ctplus_author'][] = $account->uid;
+      return isset($grants) ? $grants : array();
+     }
+  
+}
+
+
+function og_privacy_ctplus_og_access_grants_alter(&$grants, &$node) {
+    //give access to the project node if set as project manager
+    if ($node->field_ct_plus_private[0]['value'] == 'yes'){
+		foreach ($grants as $key => $var) {
+		if ($var['realm'] == 'og_subscriber') {
+			unset($grants[$key]);
+		}
+      }
+    }
+	else {
+		if ($node->pmprivate){
+		foreach ($grants as $key => $var) {
+			if ($var['realm'] == 'og_subscriber') {
+				unset($grants[$key]);
+			}
+		}
+		}
+	}
+}
+
+
+/**
+ * Implementation of hook_node_access_records.
+ */
+ function og_privacy_ctplus_node_access_records($node) {
+   if ($node->type == "ct_plus_task" || $node->type == "ct_plus_project") { 
+     //give access to the project node if set as project manager
+	if (isset($node->field_ct_plus_projectmanager) && $node->field_ct_plus_projectmanager[0]['uid'] != null){
+		$grants[] = array(
+			'realm' => 'og_privacy_ctplus_pm',
+			'gid' => $node->nid,
+			'grant_view' => TRUE,
+			'grant_update' => TRUE,  //this doesn't seem to work
+			'grant_delete' => 0,
+			'priority' => 0,
+		);
+	}
+	if (isset($node->field_ct_plus_project) && $node->field_ct_plus_project[0]['nid'] != NULL){
+		//Grants access to project managers on tasks referencing the project
+		$grants[] = array(
+			'realm' => 'og_privacy_ctplus_pm',
+			'gid' => $node->field_ct_plus_project[0]['nid'],
+			'grant_view' => TRUE,
+			'grant_update' => TRUE,  //this doesn't seem to work
+			'grant_delete' => 0,
+			'priority' => 0,
+		);
+		//Grants access to additional users (ref from the project) on tasks referencing the project
+		//only if the task isn't marked as private
+		if ($node->field_ct_plus_private[0]['value'] != 'yes') {
+			$grants[] = array (
+				'realm' => 'og_privacy_ctplus_additional',
+				'gid' => $node->field_ct_plus_project[0]['nid'],
+				'grant_view' => 1,
+				'grant_update' => 0,
+				'grant_delete' => 0,
+				'priority' => 0,
+			);
+		}
+		//add grants for author of the node
+		//I'm not sure why I need this but I do for non admins and non project managers
+		//I only need to provide "view".. update is given by normal drupal permissions "edit own" content type
+		$grants[] = array (
+			'realm' => 'og_privacy_ctplus_author',
+			'gid' => $node->uid,
+			'grant_view' => 1,
+			'priority' => 0,
+		);
+    }
+    
+     if (isset($node->field_ct_plus_additionalusers) && $node->field_ct_plus_additionalusers[0]['uid'] != NULL){
+       $grants[] = array (
+ 	'realm' => 'og_privacy_ctplus_additional',
+ 	'gid' => $node->nid,
+ 	'grant_view' => 1,
+ 	'grant_update' => 0,
+ 	'grant_delete' => 0,
+ 	'priority' => 0,
+       );
+     }
+   }
+   if (!empty($grants)) {
+     // Allow other modules to change the grants.
+     drupal_alter('og_privacy_ctplus_access_grants', $grants, $node);
+     return $grants;
+   }
+   return NULL;
+ }
+
+
+function og_privacy_ctplus_pm_refs($nid) {
+  $pmsql = "SELECT node.nid AS nid
+ FROM node node 
+ LEFT JOIN content_type_ct_plus_task node_data_field_ct_plus_project ON node.vid = node_data_field_ct_plus_project.vid
+ LEFT JOIN node node_node_data_field_ct_plus_project ON node_data_field_ct_plus_project.field_ct_plus_project_nid = node_node_data_field_ct_plus_project.nid
+ WHERE node_node_data_field_ct_plus_project.nid = " . $nid;
+  return db_query($pmsql);
+
+}
+
+function og_privacy_ctplus_get_users($uid, $reset = FALSE) {
+  static $extrausers = array();
+  
+  if ($reset) {
+    unset($extrausers[$uid]);
+  }
+
+  if (!isset($extrausers[$uid])) {
+    $sql = "SELECT node.nid AS nid,
+   node_data_field_ct_plus_additionalusers.field_ct_plus_additionalusers_uid AS node_data_field_ct_plus_additionalusers_field_ct_plus_additionalusers_uid,
+   node_data_field_ct_plus_additionalusers.delta AS node_data_field_ct_plus_additionalusers_delta,
+   node.type AS node_type,
+   node.vid AS node_vid,
+   node_data_field_ct_plus_projectmanager.field_ct_plus_projectmanager_uid AS node_data_field_ct_plus_projectmanager_field_ct_plus_projectmanager_uid,
+   node_data_field_ct_plus_projectmanager.delta AS node_data_field_ct_plus_projectmanager_delta
+ FROM node node 
+ LEFT JOIN content_field_ct_plus_additionalusers node_data_field_ct_plus_additionalusers ON node.vid = node_data_field_ct_plus_additionalusers.vid
+ LEFT JOIN users users_node_data_field_ct_plus_additionalusers ON node_data_field_ct_plus_additionalusers.field_ct_plus_additionalusers_uid = users_node_data_field_ct_plus_additionalusers.uid
+ LEFT JOIN content_field_ct_plus_projectmanager node_data_field_ct_plus_projectmanager ON node.vid = node_data_field_ct_plus_projectmanager.vid
+ LEFT JOIN users users_node_data_field_ct_plus_projectmanager ON node_data_field_ct_plus_projectmanager.field_ct_plus_projectmanager_uid = users_node_data_field_ct_plus_projectmanager.uid
+ WHERE (users_node_data_field_ct_plus_additionalusers.uid = $uid) OR (users_node_data_field_ct_plus_projectmanager.uid = $uid)
+";
+    $result = db_query($sql);
+	while ($row = db_fetch_array($result)) {
+	  if ($row['node_data_field_ct_plus_projectmanager_delta'] != NULL) {
+	    $extrausers[$uid][$row['nid']]['projectmanager'] = $row;
+	    $pmresult = og_privacy_ctplus_pm_refs($row['nid']);
+	    while ($pmrow = db_fetch_array($pmresult)) {
+	       $extrausers[$uid][$row['nid']]['projectmanager']['tasks'][$pmrow['nid']] = $pmrow;
+	    }
+	  }
+	  if ($row['node_data_field_ct_plus_additionalusers_delta'] != NULL) {
+	    $extrausers[$uid][$row['nid']]['additionalusers'] = $row;
+	  }
+	}
+    if (!isset($subscriptions[$uid][$min_is_active])) {
+      $subscriptions[$uid][$min_is_active] = array();
+    }
+  }
+  return $extrausers[$uid];
+}
+
+
+
+
