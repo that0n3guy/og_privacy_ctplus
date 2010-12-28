@@ -41,17 +41,9 @@ function og_privacy_ctplus_strongarm() {
     ),
     'comment_settings' => array(
       'region' => 'right',
-      'weight' => '6',
-      'has_required' => FALSE,
-      'title' => 'Comment settings',
-      'collapsed' => 1,
-      'hidden' => 0,
-    ),
-    'path' => array(
-      'region' => 'right',
       'weight' => '5',
       'has_required' => FALSE,
-      'title' => 'URL path settings',
+      'title' => 'Comment settings',
       'collapsed' => 1,
       'hidden' => 0,
     ),
@@ -94,14 +86,6 @@ function og_privacy_ctplus_strongarm() {
       'collapsed' => 1,
       'hidden' => 0,
     ),
-    'attachments' => array(
-      'region' => 'main',
-      'weight' => '30',
-      'has_required' => FALSE,
-      'title' => 'File attachments',
-      'collapsed' => 1,
-      'hidden' => 0,
-    ),
     'field_files' => array(
       'region' => 'main',
       'weight' => '32',
@@ -123,12 +107,13 @@ function og_privacy_ctplus_strongarm() {
       'collapsed' => 0,
       'hidden' => 0,
     ),
-    'group_ct_plus_access_settings' => array(
+    'og_privacy_ctplus' => array(
       'region' => 'right',
       'weight' => '0',
-      'has_required' => TRUE,
-      'title' => 'Additional Access Settings',
-      'collapsed' => 0,
+      'has_required' => FALSE,
+      'title' => 'OG Privacy CTPlus "privacy" settings',
+      'collapsed' => 1,
+      'hidden' => 0,
     ),
   );
 
@@ -227,12 +212,14 @@ function og_privacy_ctplus_strongarm() {
       'weight' => '1',
       'has_required' => TRUE,
       'title' => 'Required properties',
+      'collapsed' => 0,
     ),
     'group_ct_plus_properties_big' => array(
       'region' => 'main',
       'weight' => '2',
       'has_required' => FALSE,
       'title' => 'Optional properties',
+      'collapsed' => 1,
       'hidden' => 0,
     ),
     'group_files' => array(
@@ -243,32 +230,30 @@ function og_privacy_ctplus_strongarm() {
       'collapsed' => 1,
       'hidden' => 0,
     ),
-    'path' => array(
-      'region' => 'main',
-      'weight' => '7.9',
-      'has_required' => FALSE,
-      'title' => 'URL path settings',
-      'collapsed' => 1,
-      'hidden' => 0,
-    ),
-    'attachments' => array(
-      'region' => 'main',
-      'weight' => '7.9',
-      'has_required' => FALSE,
-      'title' => 'File attachments',
-      'collapsed' => 1,
-      'hidden' => 0,
-    ),
-    'group_ct_plus_access_settings' => array(
+    'og_privacy_ctplus' => array(
       'region' => 'right',
       'weight' => '0',
-      'has_required' => TRUE,
-      'title' => 'Additional Access Settings',
-      'collapsed' => 0,
+      'has_required' => FALSE,
+      'title' => 'OG Privacy CTPlus "privacy" settings',
+      'collapsed' => 1,
+      'hidden' => 0,
     ),
   );
 
   $export['nodeformscols_field_placements_ct_plus_task_default'] = $strongarm;
+  $strongarm = new stdClass;
+  $strongarm->disabled = FALSE; /* Edit this to true to make a default strongarm disabled initially */
+  $strongarm->api_version = 1;
+  $strongarm->name = 'og_privacy_ctplus_nodes_ct_plus_project';
+  $strongarm->value = 1;
 
+  $export['og_privacy_ctplus_nodes_ct_plus_project'] = $strongarm;
+  $strongarm = new stdClass;
+  $strongarm->disabled = FALSE; /* Edit this to true to make a default strongarm disabled initially */
+  $strongarm->api_version = 1;
+  $strongarm->name = 'og_privacy_ctplus_nodes_ct_plus_task';
+  $strongarm->value = 1;
+
+  $export['og_privacy_ctplus_nodes_ct_plus_task'] = $strongarm;
   return $export;
 }

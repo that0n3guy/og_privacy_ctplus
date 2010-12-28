@@ -1,0 +1,89 @@
+<?php
+/**
+ * @file
+ * Implementation of hook_install().
+ */
+function og_privacy_ctplus_schema() {
+  $schema = array();
+
+  $schema['og_privacy_ctplus'] = array(
+    'fields' => array(
+			// 'ogpid' => array(
+	    // 'description' => 'matching up uid queries',
+        // 'type' => 'serial',
+        // 'not null' => TRUE,
+        // 'unsigned' => TRUE,
+      // ),
+      'nid' => array(
+				'description' => 'The node id for the node',
+        'type' => 'int',
+        'not null' => TRUE,
+        'unsigned' => TRUE,
+      ),
+      'muser' => array(
+				'description' => 'The referenced user id',
+        'type' => 'text',
+				'default' => '',
+        'not null' => TRUE,
+				'serialize' => TRUE,
+      ),
+      'auser' => array(
+				'description' => 'The referenced user id',
+        'type' => 'text',
+				'default' => '',
+        'not null' => TRUE,
+				'serialize' => TRUE,
+      ),
+      // 'typeid' => array(
+	    // 'description' => 'Type of reference, 0=manager, 1=additionaluser',
+        // 'type' => 'int',
+        // 'not null' => TRUE,
+        // 'unsigned' => TRUE,
+      // ),
+      'private' => array(
+				'description' => 'Marks if this node is set as private or not',
+        'type' => 'int',
+        'not null' => TRUE,
+        'unsigned' => TRUE,
+      ),
+    ),
+		'primary key' => array('nid'),
+  );
+	
+	  $schema['og_privacy_ctplus_uid'] = array(
+    'fields' => array(
+      'nid' => array(
+				'description' => 'matching up withother table',
+        'type' => 'int',
+        'not null' => TRUE,
+        'unsigned' => TRUE,
+      ),
+      'uid' => array(
+				'description' => 'The referenced user id',
+        'type' => 'int',
+        'not null' => TRUE,
+        'unsigned' => TRUE,
+      ),
+      'typeid' => array(
+	    'description' => 'Type of reference, 0=manager, 1=additionaluser',
+        'type' => 'int',
+        'not null' => TRUE,
+        'unsigned' => TRUE,
+      ),
+    ),
+  );
+  
+  return $schema;
+}
+
+function og_privacy_ctplus_install() {
+  drupal_install_schema('og_privacy_ctplus');
+	drupal_install_schema('og_privacy_ctplus_uid');
+
+  //db_query("UPDATE {system} SET weight = %d WHERE name = '%s'", -1, 'og_privacy_ctplus');
+}
+
+function og_privacy_ctplus_uninstall() {
+  drupal_uninstall_schema('og_privacy_ctplus');
+	drupal_uninstall_schema('og_privacy_ctplus_uid');
+}

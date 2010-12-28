@@ -3,11 +3,14 @@
 // Need to still test:
 // - FIXED - NEEDS MORE TESTING - project with additional users - do they get access to all tasks under the project, but not private tasks?
 // - FIXED - owners can lock them selves out
-
+// - fixed - convert to serialized arrays in database for less queries
+// add this to form submit validator: $uid = db_result(db_query("SELECT uid FROM {users} WHERE name = '%s'", $muser)) && 
+// make it so outside group users, if set to manager or a node, can pick project/referenced or it just uses the previous one.
+// add the ability for managers of a project to create tasks underneith the project if they are outside the group. 
 include_once('og_privacy_ctplus.features.inc');
 
 /**
- * Implementation of hook_og_privacy_policy_info().
+ * Implementation of hook_og_privacy_policy_info() from og_privacy api.
  */
 function og_privacy_ctplus_og_privacy_policy_info($node) {
   $policies = array();
@@ -20,7 +23,7 @@ function og_privacy_ctplus_og_privacy_policy_info($node) {
 }
 
 /*
-* "private" group policy callback.
+* "private" group policy callback from og_privacy api.
 */
 function og_privacy_ctplus_set_private($node) {
   //makes the group private by removing og_public access realm
@@ -31,52 +34,238 @@ function og_privacy_ctplus_set_private($node) {
   }
 }
 
+/************************************************************************
+ DRUPAL HOOKS
+*************************************************************************/
+
+/**
+ * Implementation of hook_menu().
+ */
+function og_privacy_ctplus_menu() {
+  $items[] = array();
+  $items['og_privacy_ctplus/add/autocomplete'] = array(
+    'type' => MENU_CALLBACK,
+    'access arguments' => array('access content'),
+    'page callback' => 'og_privacy_ctplus_autocomplete',
+  );
+  // ...code...
+  return $items;
+}
+/**
+ * Custom autocomplete callback that retrieves all users that a user has
+ * access to see. Differs from user_autocomplete() only in that it pushes
+ * the query through db_rewrite_sql().
+ */
+function og_privacy_ctplus_autocomplete($string = '') {
+  $matches = array();
+  $names = explode(",", $string);  
+  foreach($names as &$s) {  
+     $s=trim($s);  
+   }  
+  $name = array_pop($names);  
+  // if ($string) {
+    // $query = "SELECT uid, name FROM {users} WHERE LOWER(name) LIKE LOWER('%s%%')";
+    // $query = db_rewrite_sql($query, 'users', 'uid', array($string));
+    // $result = db_query_range($query, $string, 0, 10);
+    // while ($user = db_fetch_object($result)) {
+      // $matches[$user->name] = check_plain($user->name);
+    // }
+  // }
+	$result = db_query_range("SELECT name FROM {users} WHERE LOWER(name) LIKE LOWER('%s%%')", $name, 0, 10);
+  while ($user = db_fetch_object($result)) {
+    if (count($names) > 0) {
+      $matches[implode(", ",$names) .", ". $user->name] = check_plain($user->name);
+    }
+    else {
+      $matches[$user->name] = check_plain($user->name);
+    }
+  }
+  drupal_json($matches);	
+}
+/**
+ * Implementation of hook_form_alter().
+ *
+ * Adds the options for tracking time to the 
+ */
+function og_privacy_ctplus_form_alter(&$form, $form_state, $form_id) {
+  if ($form_id == 'node_type_form' && isset($form['identity']['type'])) {
+    $form['og_privacy_ctplus'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('OG Privacy CTPlus "privacy" settings'),
+      '#collapsible' => TRUE,
+      '#collapsed' => TRUE,
+    );
+    $form['og_privacy_ctplus']['og_privacy_ctplus_nodes'] = array(
+      '#type' => 'checkbox',
+      '#title' => t('Use "OG Privacy CTPlus - Privacy" on this content types nodes'),
+      '#default_value' => variable_get('og_privacy_ctplus_nodes_' . $form['#node_type']->type, 0),
+      '#description' => t('Use og_privacy_ctplus on this content types nodes.'), 
+    );
+  }
+	// if this is a node form and we're are using og_privacy_ctplus on it.
+  if ($form['#id'] == 'node-form' && variable_get('og_privacy_ctplus_nodes_' . $form['type']['#value'], 0)) {
+		// Store time entries from nodes
+		$sql = "SELECT * FROM {og_privacy_ctplus} AS users
+						WHERE nid = %d";
+		// Get the entries associated with this node
+		$resource = db_query($sql, $form['nid']['#value']);
+		$privacyinfo = db_fetch_object($resource);
+		$privacyinfo->muser = unserialize($privacyinfo->muser);
+		$privacyinfo->auser = unserialize($privacyinfo->auser);		
+    $form['og_privacy_ctplus'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('OG Privacy CTPlus "privacy" settings'),
+      '#collapsible' => TRUE,
+      '#collapsed' => TRUE,
+    );
+		// Different description if project node type.
+		$form['og_privacy_ctplus']['og_privacy_ctplus_private'] = array(
+			'#type' => 'checkbox',
+			'#title' => t('Set this node as private'),
+			'#default_value' => $privacyinfo->private != '' ? $privacyinfo->private : 0,
+			'#description' => $form['type']['#value'] == 'ct_plus_project' ? t('This will remove access to this project and its tasks from all group users except for group admins, managers (specified below), and additional users (specified below).') : t('This will remove access to this node from all group users except for group admins, managers (specified below), and additional users (specified below).'), 
+		);
+		$form['og_privacy_ctplus']['og_privacy_ctplus_managers'] = array(
+			'#type' => 'textfield',
+			'#title' => t('Managers'),
+			'#default_value' => $privacyinfo->muser != '' ? t(implode(', ', $privacyinfo->muser)) : '',
+			'#autocomplete_path' => 'og_privacy_ctplus/add/autocomplete',
+			'#description' => $form['type']['#value'] == 'ct_plus_project' ? t('This will give the users access to this project and all tasks associated with it, even if the tasks are marked as private.  This will also give the users the ability to edit tasks FIX>>and create new ones under that project<<FIX.  This will not give them access to any other content in the group.') : t('This will give the users access to this node, even if this node is marked as private.  This will not give the users access to any other content in the group.'),
+		);
+		$form['og_privacy_ctplus']['og_privacy_ctplus_addusers'] = array(
+			'#type' => 'textfield',
+			'#title' => t('Additional Users'),
+			'#default_value' => $privacyinfo->auser != '' ? t(implode(', ', $privacyinfo->auser)) : '',
+			'#autocomplete_path' => 'og_privacy_ctplus/add/autocomplete',
+			'#description' => $form['type']['#value'] == 'ct_plus_project' ? t('This will give users access to this project (even if its private) and all tasks associated with it (unless the tasks are marked as private), even if users are not members of the group.  This will not give them access to any other content in the group.') : t('This will give users access to this node (even if it is private), even if the users are not members of the group.  This will not give them access to any other content in the group.'),
+		);		
+
+		$form['#submit'][] = 'og_privacy_ctplus_node_submit';  //Be sure not to use 'form' for the 'functionName' part as it will confuse drupal.  Use a descriptive name.
+  }
+}
+
+function og_privacy_ctplus_db_write($nid, $musers, $ausers, $private, $authoruid = NULL) {
+	$authset = FALSE;
+	$musers = explode(", ", $musers);
+	$ausers = explode(", ", $ausers);
+	if ($musers[0] != '') {	
+		foreach ($musers as $key => $m) {
+			$uid = db_result(db_query("SELECT uid FROM {users} WHERE name = '%s'", $m));
+			//checks if user is actually a user or if user is author of node.
+			if ($uid != '' && $uid != $authoruid) {
+				$muser[$uid] = $m;
+				$extra = array (
+					'nid' => $nid,
+					'uid' => $uid,
+					'typeid' => 0,
+				);	
+				drupal_write_record('og_privacy_ctplus_uid', $extra);
+			}
+			else if ($uid == $authoruid){
+			$muser[$uid] = $m;
+			$extra = array (
+				'nid' => $nid,
+				'uid' => $uid,
+				'typeid' => 0,
+			);	
+			drupal_write_record('og_privacy_ctplus_uid', $extra);
+			$authset = TRUE;
+				drupal_set_message("Node Author <strong>$m</strong> has been auto-set as a manager of this node.", $type = 'status', $repeat = TRUE);
+			}
+			else {
+				drupal_set_message("User <strong>$m</strong> is not a real username and was not be given permissions.", $type = 'warning', $repeat = TRUE);
+			}
+		}
+	}
+	if ($ausers[0] != '') {	
+			foreach ($ausers as $key => $a) {
+			if ($uid = db_result(db_query("SELECT uid FROM {users} WHERE name = '%s'", $a))) {
+				$auser[$uid] = $a;
+				$extra = array (
+					'nid' => $nid,
+					'uid' => $uid,
+					'typeid' => 1,
+				);	
+				drupal_write_record('og_privacy_ctplus_uid', $extra);
+			}
+			else {
+				drupal_set_message("User <strong>$a</strong> is not a real username and was not be given permissions.", $type = 'warning', $repeat = TRUE);
+			}
+		}
+	}
+	if(!$authset){
+		$muser[$authoruid] = db_result(db_query("SELECT name FROM {users} WHERE uid = '%d'", $authoruid));
+				$extra = array (
+					'nid' => $nid,
+					'uid' => $authoruid,
+					'typeid' => 0,
+				);	
+				drupal_write_record('og_privacy_ctplus_uid', $extra);
+				drupal_set_message("Node Author <strong>$muser[$authoruid]</strong> has been auto-set as a manager of this node.", $type = 'status', $repeat = TRUE);
+
+	}
+	$stuff = array (
+		'nid' => $nid,
+		'muser' => $muser,
+		'auser' => $auser,
+		'private' => $private,
+	);	
+	drupal_write_record('og_privacy_ctplus', $stuff);
+}
+
+function og_privacy_ctplus_node_submit($form, &$form_state) {
+	//If the node is edited, use this... otherwise let nodeapi "insert" handle it
+	if (isset($form_state['values']['nid'])) {
+		//remove previous setting from db
+	  $query = 'DELETE FROM {og_privacy_ctplus} WHERE nid = %d';
+		db_query($query, $form_state['values']['nid']);
+		$query2 = 'DELETE FROM {og_privacy_ctplus_uid} WHERE nid = %d';
+		db_query($query2, $form_state['values']['nid']);
+		og_privacy_ctplus_db_write($form_state['values']['nid'], $form_state['values']['og_privacy_ctplus_managers'], $form_state['values']['og_privacy_ctplus_addusers'], $form_state['values']['og_privacy_ctplus_private'], $form_state['values']['uid']);
+	}
+}
+
 /**
  * Implementation of hook_nodeapi().
  */
 function og_privacy_ctplus_nodeapi(&$node, $op) {
  switch ($op) {
+	case 'insert':
+		if (variable_get('og_privacy_ctplus_nodes_' . $node->type, 0)) {
+			og_privacy_ctplus_db_write($node->nid, $node->og_privacy_ctplus_managers, $node->og_privacy_ctplus_addusers, $node->og_privacy_ctplus_private, $node->uid);
+		}
+	break;
 	case 'load':
+		//Custom stuff just for Project/Tasks
+		//setting a "private marker" in node object all tasks under a project that is private
 		if ($node->type == "ct_plus_task" && $project = $node->field_ct_plus_project[0]['nid']){
 			$project = node_load($project);
-			if ($project->field_ct_plus_private[0]['value'] == 'yes') {
+			if (db_result(db_query("SELECT private FROM {og_privacy_ctplus} WHERE nid = '%d'", $node->field_ct_plus_project[0]['nid']))) {
 				//set if a tasks project is private, making the task private.
 				$node->pmprivate = 1;
 			}
 		}
+		//If node is private, set field in object on node load
+		if (variable_get('og_privacy_ctplus_nodes_' . $node->type, 0)){
+				$sql = "SELECT private FROM {og_privacy_ctplus} AS users
+								WHERE nid = %d";
+				$result = db_fetch_object(db_query($sql, $node->nid)); 
+				$node->og_privacy_ctplus_private = $result->private;
+		}
 		break;
-	case 'presave':
-			if ($node->type == "ct_plus_project") {
-				//make sure node author is also a project manager automatically
-				$pmset = FALSE;
-				if ($node->field_ct_plus_projectmanager[0]['uid'] != NULL) {
-					foreach($node->field_ct_plus_projectmanager as $key => $val) {
-						if($val['uid'] == $node->uid){
-							$pmset = TRUE;
-						}
-					}
-					if(!$pmset) {
-						$node->field_ct_plus_projectmanager[$key+1]['uid'] = $node->uid;
-					}
-				}
-				else {
-					$node->field_ct_plus_projectmanager[0]['uid'] = $node->uid;
-				}
-
-			}
-	break;
 	case 'update':
+		//Custom stuff just for Project/Tasks
 		if ($node->type == "ct_plus_project") {
-			
 			//grab the nid's that are referencing the current node
 			//redo node access to those referencing nodes.
 			//this may be a hack and may need to change.
 			$pmresult = og_privacy_ctplus_pm_refs($node->nid);
 			if (isset($pmresult)) {
+				//for each node referencing this project node, load, set pmprivate, and set correct grants
 				while ($pmrow = db_fetch_array($pmresult)) {
 					$pmnode = node_load($pmrow['nid']);
 					//below sets the overrides pmprivate in the node b/c this runs before access_grants_alter
-					if($node->field_ct_plus_private[0]['value'] == 'no') {// && $pmnode->pmprivate == 1) {
+					if(!$node->og_privacy_ctplus_private) {
 						$pmnode->pmprivate = 0;
 						node_access_acquire_grants($pmnode);
 					}
@@ -87,14 +276,11 @@ function og_privacy_ctplus_nodeapi(&$node, $op) {
 				}
 			}
 		}
+		break;
+		case 'delete':
+		db_query("DELETE FROM {og_privacy_ctplus} WHERE nid = %d", $node->nid);
+		db_query("DELETE FROM {og_privacy_ctplus_uid} WHERE nid = %d", $node->nid);
   }
-}
-
-
-/**
- * Implementation of hook_form_alter().
- */
-function og_privacy_ctplus_form_alter(&$form, &$form_state, $form_id) {
 }
 
 
@@ -102,43 +288,46 @@ function og_privacy_ctplus_form_alter(&$form, &$form_state, $form_id) {
  * Implementation of hook_node_grants().
  */
 function og_privacy_ctplus_node_grants($account, $op) {
-     if ($op == 'view') {
-      // See if user is Project manager or "additional" user... get a grant for them.
-      if ($extrausers = og_privacy_ctplus_get_users($account->uid)) {
-	foreach ($extrausers as $key => $val) {
-	  // Project managers get more permissions.
-	  if ($val['projectmanager']) {
-	    $grants['og_privacy_ctplus_pm'][] = $key;
-	  }
-	  else if ($val['additionalusers']) {
-	    $grants['og_privacy_ctplus_additional'][] = $key;
-	  }
+	if ($op == 'view' || $op == 'update') {
+		// See if user is manager or "additional" user... get a grant for them.
+		if ($refnodes = og_privacy_ctplus_get_refnodes($account->uid)) {
+				// Managers get more permissions.
+			if(isset($refnodes['managers'])) {
+				foreach ($refnodes['managers'] as $key => $val) {
+					$grants['og_privacy_ctplus_pm'][] = $key;
+				}
+			}
+			if(isset($refnodes['addusers'])) {
+				foreach ($refnodes['addusers'] as $key => $val) {
+					$grants['og_privacy_ctplus_additional'][] = $key;
+				}			
+			}
+		}
+		//set grants if owner of own node
+		$grants['og_privacy_ctplus_author'][] = $account->uid;
+		return isset($grants) ? $grants : array();
 	}
-      }
-	  //set grants if owner of own node
-	  $grants['og_privacy_ctplus_author'][] = $account->uid;
-      return isset($grants) ? $grants : array();
-     }
-  
 }
 
-
 function og_privacy_ctplus_og_access_grants_alter(&$grants, &$node) {
-    //give access to the project node if set as project manager
-    if ($node->field_ct_plus_private[0]['value'] == 'yes'){
-		foreach ($grants as $key => $var) {
-		if ($var['realm'] == 'og_subscriber') {
-			unset($grants[$key]);
-		}
-      }
-    }
-	else {
-		if ($node->pmprivate){
+	//If the node is marked as private then remove group permissions
+	if (db_result(db_query("SELECT private FROM {og_privacy_ctplus} WHERE nid = '%d'", $node->nid))){
 		foreach ($grants as $key => $var) {
 			if ($var['realm'] == 'og_subscriber') {
 				unset($grants[$key]);
 			}
 		}
+	}
+	else {
+		//if the node has the pmprivate marker it should restrict group users from viewing
+		//This should only be for task under a project that is marked as private
+		//Custom code for Project/Tasks
+		if ($node->pmprivate){
+			foreach ($grants as $key => $var) {
+				if ($var['realm'] == 'og_subscriber') {
+					unset($grants[$key]);
+				}
+			}
 		}
 	}
 }
@@ -148,34 +337,55 @@ function og_privacy_ctplus_og_access_grants_alter(&$grants, &$node) {
  * Implementation of hook_node_access_records.
  */
  function og_privacy_ctplus_node_access_records($node) {
-   if ($node->type == "ct_plus_task" || $node->type == "ct_plus_project") { 
-     //give access to the project node if set as project manager
-	if (isset($node->field_ct_plus_projectmanager) && $node->field_ct_plus_projectmanager[0]['uid'] != null){
-		$grants[] = array(
-			'realm' => 'og_privacy_ctplus_pm',
-			'gid' => $node->nid,
-			'grant_view' => TRUE,
-			'grant_update' => TRUE,  //this doesn't seem to work
-			'grant_delete' => 0,
-			'priority' => 0,
-		);
-	}
-	if (isset($node->field_ct_plus_project) && $node->field_ct_plus_project[0]['nid'] != NULL){
-		//Grants access to project managers on tasks referencing the project
-		$grants[] = array(
-			'realm' => 'og_privacy_ctplus_pm',
-			'gid' => $node->field_ct_plus_project[0]['nid'],
-			'grant_view' => TRUE,
-			'grant_update' => TRUE,  //this doesn't seem to work
-			'grant_delete' => 0,
-			'priority' => 0,
-		);
-		//Grants access to additional users (ref from the project) on tasks referencing the project
-		//only if the task isn't marked as private
-		if ($node->field_ct_plus_private[0]['value'] != 'yes') {
+	if (variable_get('og_privacy_ctplus_nodes_' . $node->type, 0)) {
+		//give access to the node if set as manager
+		$sql = "SELECT * FROM {og_privacy_ctplus} AS users
+						WHERE nid = %d";
+		// Get the entries associated with this node
+		$resource = db_query($sql, $node->nid);
+		$privacyinfo = db_fetch_object($resource);
+		$privacyinfo->muser = unserialize($privacyinfo->muser);
+		$privacyinfo->auser = unserialize($privacyinfo->auser);
+		if ($privacyinfo->muser != ''){
+			$grants[] = array(
+				'realm' => 'og_privacy_ctplus_pm',
+				'gid' => $node->nid,
+				'grant_view' => TRUE,
+				'grant_update' => TRUE,  //this doesn't seem to work
+				'grant_delete' => 0,
+				'priority' => 0,
+			);
+		}
+		//Custom code for Project/Tasks
+		if (isset($node->field_ct_plus_project) && $node->field_ct_plus_project[0]['nid'] != NULL){
+			//Grants access to managers on tasks referencing the project
+			$grants[] = array(
+				'realm' => 'og_privacy_ctplus_pm',
+				'gid' => $node->field_ct_plus_project[0]['nid'],
+				'grant_view' => TRUE,
+				'grant_update' => TRUE,  //this doesn't seem to work
+				'grant_delete' => 0,
+				'priority' => 0,
+			);
+			//Grants access to additional users (ref from the project) on tasks referencing the project
+			//only if the task isn't marked as private (
+			//Custom code for Project/Tasks
+			if (!$node->og_privacy_ctplus_private) {
+				$grants[] = array (
+					'realm' => 'og_privacy_ctplus_additional',
+					'gid' => $node->field_ct_plus_project[0]['nid'],
+					'grant_view' => 1,
+					'grant_update' => 0,
+					'grant_delete' => 0,
+					'priority' => 0,
+				);
+			}
+		}
+		if ($privacyinfo->auser != ''){
+
 			$grants[] = array (
 				'realm' => 'og_privacy_ctplus_additional',
-				'gid' => $node->field_ct_plus_project[0]['nid'],
+				'gid' => $node->nid,
 				'grant_view' => 1,
 				'grant_update' => 0,
 				'grant_delete' => 0,
@@ -183,7 +393,7 @@ function og_privacy_ctplus_og_access_grants_alter(&$grants, &$node) {
 			);
 		}
 		//add grants for author of the node
-		//I'm not sure why I need this but I do for non admins and non project managers
+		//I'm not sure why I need this but I do for non group admins and non project managers
 		//I only need to provide "view".. update is given by normal drupal permissions "edit own" content type
 		$grants[] = array (
 			'realm' => 'og_privacy_ctplus_author',
@@ -191,26 +401,14 @@ function og_privacy_ctplus_og_access_grants_alter(&$grants, &$node) {
 			'grant_view' => 1,
 			'priority' => 0,
 		);
-    }
-    
-     if (isset($node->field_ct_plus_additionalusers) && $node->field_ct_plus_additionalusers[0]['uid'] != NULL){
-       $grants[] = array (
- 	'realm' => 'og_privacy_ctplus_additional',
- 	'gid' => $node->nid,
- 	'grant_view' => 1,
- 	'grant_update' => 0,
- 	'grant_delete' => 0,
- 	'priority' => 0,
-       );
-     }
-   }
-   if (!empty($grants)) {
-     // Allow other modules to change the grants.
-     drupal_alter('og_privacy_ctplus_access_grants', $grants, $node);
-     return $grants;
-   }
-   return NULL;
- }
+	}
+	if (!empty($grants)) {
+		// Allow other modules to change the grants.
+		drupal_alter('og_privacy_ctplus_access_grants', $grants, $node);
+		return $grants;
+	}
+	return NULL;
+}
 
 
 function og_privacy_ctplus_pm_refs($nid) {
@@ -219,50 +417,33 @@ function og_privacy_ctplus_pm_refs($nid) {
  LEFT JOIN content_type_ct_plus_task node_data_field_ct_plus_project ON node.vid = node_data_field_ct_plus_project.vid
  LEFT JOIN node node_node_data_field_ct_plus_project ON node_data_field_ct_plus_project.field_ct_plus_project_nid = node_node_data_field_ct_plus_project.nid
  WHERE node_node_data_field_ct_plus_project.nid = " . $nid;
+	//returns all nodes that reference a project nid
   return db_query($pmsql);
-
 }
 
-function og_privacy_ctplus_get_users($uid, $reset = FALSE) {
-  static $extrausers = array();
+//This fetches all the nids that point to a user for this module
+function og_privacy_ctplus_get_refnodes($uid, $reset = FALSE) {
+  static $refnodes = array();
   
   if ($reset) {
-    unset($extrausers[$uid]);
+    unset($refnodes[$uid]);
   }
 
-  if (!isset($extrausers[$uid])) {
-    $sql = "SELECT node.nid AS nid,
-   node_data_field_ct_plus_additionalusers.field_ct_plus_additionalusers_uid AS node_data_field_ct_plus_additionalusers_field_ct_plus_additionalusers_uid,
-   node_data_field_ct_plus_additionalusers.delta AS node_data_field_ct_plus_additionalusers_delta,
-   node.type AS node_type,
-   node.vid AS node_vid,
-   node_data_field_ct_plus_projectmanager.field_ct_plus_projectmanager_uid AS node_data_field_ct_plus_projectmanager_field_ct_plus_projectmanager_uid,
-   node_data_field_ct_plus_projectmanager.delta AS node_data_field_ct_plus_projectmanager_delta
- FROM node node 
- LEFT JOIN content_field_ct_plus_additionalusers node_data_field_ct_plus_additionalusers ON node.vid = node_data_field_ct_plus_additionalusers.vid
- LEFT JOIN users users_node_data_field_ct_plus_additionalusers ON node_data_field_ct_plus_additionalusers.field_ct_plus_additionalusers_uid = users_node_data_field_ct_plus_additionalusers.uid
- LEFT JOIN content_field_ct_plus_projectmanager node_data_field_ct_plus_projectmanager ON node.vid = node_data_field_ct_plus_projectmanager.vid
- LEFT JOIN users users_node_data_field_ct_plus_projectmanager ON node_data_field_ct_plus_projectmanager.field_ct_plus_projectmanager_uid = users_node_data_field_ct_plus_projectmanager.uid
- WHERE (users_node_data_field_ct_plus_additionalusers.uid = $uid) OR (users_node_data_field_ct_plus_projectmanager.uid = $uid)
-";
-    $result = db_query($sql);
-	while ($row = db_fetch_array($result)) {
-	  if ($row['node_data_field_ct_plus_projectmanager_delta'] != NULL) {
-	    $extrausers[$uid][$row['nid']]['projectmanager'] = $row;
-	    $pmresult = og_privacy_ctplus_pm_refs($row['nid']);
-	    while ($pmrow = db_fetch_array($pmresult)) {
-	       $extrausers[$uid][$row['nid']]['projectmanager']['tasks'][$pmrow['nid']] = $pmrow;
-	    }
-	  }
-	  if ($row['node_data_field_ct_plus_additionalusers_delta'] != NULL) {
-	    $extrausers[$uid][$row['nid']]['additionalusers'] = $row;
-	  }
-	}
-    if (!isset($subscriptions[$uid][$min_is_active])) {
-      $subscriptions[$uid][$min_is_active] = array();
-    }
+  if (!isset($refnodes[$uid])) {
+		$sql = "SELECT * FROM {og_privacy_ctplus_uid} AS users
+						WHERE uid = %d";
+		// Get the entries associated with this node
+		$resource = db_query($sql, $uid);
+		 while ($nids = db_fetch_object($resource)) {
+			if ($nids->typeid == 0) {
+				$refnodes[$uid]['managers'][$nids->nid] = $nids->nid;
+			}
+			if ($nids->typeid == 1) {
+				$refnodes[$uid]['addusers'][$nids->nid] = $nids->nid;
+			}			
+		}
   }
-  return $extrausers[$uid];
+   return $refnodes[$uid];
 }
 
 
